@@ -1,8 +1,8 @@
+import std / [os, tables, sets, sequtils]
 import fswatcher/base
 
 export base 
 
-import std/tables
 const bsdPlatform = defined(macosx) or defined(freebsd) or
                     defined(netbsd) or defined(openbsd) or
                     defined(dragonfly)
@@ -57,34 +57,64 @@ proc start*(watcher: FsWatcher) =
   when defined(linux):
     var evs = newSeq[byte](8192)
     var e: WatchEvent
+    var name: string
+    var origin: cstring
     while (let n = posix.read(fd, evs[0].addr, 8192); n) > 0:
       for e in inotify_events(evs[0].addr, n): 
-        var origin: cstring
         doAssert fcntl(e[].wd,F_GETPATH, origin ) != -1
+        name = $e[].wd
         if $origin notin watcher.wached:
           continue
         case e[].mask
         of IN_MODIFY:
-          e = (name:"",action: WatchEventKind.Modify,newName:"" )
+          e = (name, action: WatchEventKind.Modify,newName:"" )
         of IN_CREATE:
-          e = (name:"",action: WatchEventKind.Create,newName:"" )
+          e = (name, action: WatchEventKind.Create,newName:"" )
         of IN_DELETE:
-          e = (name:"",action: WatchEventKind.Remove,newName:"" )
+          e = (name, action: WatchEventKind.Remove,newName:"" )
         of IN_MOVED_FROM:
-          e = (name:"",action: WatchEventKind.Rename,newName:"" )
+          e = (name, action: WatchEventKind.Rename,newName:"" )
         of IN_MOVED_TO:
-          e = (name:"",action: WatchEventKind.Rename,newName:"" )
+          e = (name, action: WatchEventKind.Rename,newName:"" )
         watcher.wached[origin](e)
 
   elif bsdPlatform:
+    const yieldFilter = {pcFile,pcDir,pcLinkToFile,pcLinkToDir}
+    const followFilter = {pcDir, pcLinkToDir}
+    let records = TableRef[string, HashSet[string]]()
+    var events: seq[ReadyKey]
+    var origin: string
+    var e: WatchEvent
+    for k in watcher.wached.keys():
+      if dirExists(k):
+        records[k] = toHashSet(toSeq(walkDirRec(k, yieldFilter)))
     while true:
-      let events = watcher.selector.select(200)
+      events = watcher.selector.select(200)
       for ev in events:
-        let origin = watcher.selector.getData(ev.fd.int)
+        origin = watcher.selector.getData(ev.fd.int)
         if origin notin watcher.wached:
           continue
-        let e = (name:"",action: WatchEventKind.NonAction,newName:"" )
-        watcher.wached[origin](e)
+        if origin in records:
+          let newFs = toHashSet(toSeq(walkDirRec(origin, yieldFilter)))
+          let nl = newFs.len
+          let ol = records[origin].len
+          let diff = toSeq(symmetricDifference(records[origin],newFs))
+          if diff.len > 0:
+            if nl > ol:
+              e = (name: diff[0],action: WatchEventKind.Create,newName:"" )
+            elif ol > nl:
+              e = (name: diff[0],action: WatchEventKind.Remove,newName:"" )
+            else:
+              var o: string
+              var n: string
+              for d in diff:
+                if d in records[origin]:
+                  o = d
+                else:
+                  n = d
+              e = (name: o,action: WatchEventKind.Rename,newName:n )
+            records[origin] =  newFs
+          watcher.wached[origin](e)
 
 proc stop*(watcher: FsWatcher) =
   when defined(linux):

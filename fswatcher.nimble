@@ -10,7 +10,7 @@ srcDir        = "src"
 # Dependencies
 
 requires "nim >= 1.0.0"
-requires "asynctools"
+requires "tempfile"
 
 before test:
   exec "nimble build"

@@ -1,10 +1,10 @@
 import std/[unittest, os]
 import .. / src / fswatcher
-
+import tempfile
 suite "fswatcher":
   test "watch":
     let watcher = newFsWatcher()
-    let temp = getTempDir()
+    let temp = mkdtemp()
     let cb = proc (e: WatchEvent) =
       echo e
     echo temp
